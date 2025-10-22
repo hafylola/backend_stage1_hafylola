@@ -5,12 +5,16 @@ from hashlib import sha256
 from datetime import datetime
 import re
 
-app = FastAPI(title="Stage 1 - String Analyzer")
+app = FastAPI(title="Stage 1 - Bot-Proof String Analyzer")
 
-# In-memory storage keyed by SHA-256 hash
+# -------------------------
+# In-memory storage
+# -------------------------
 db: Dict[str, dict] = {}
 
-# Request model
+# -------------------------
+# Pydantic request model
+# -------------------------
 class StringRequest(BaseModel):
     value: str
 
@@ -18,12 +22,13 @@ class StringRequest(BaseModel):
 # Helper functions
 # -------------------------
 def compute_properties(value: str):
-    hash_value = sha256(value.encode()).hexdigest()
-    char_freq = {c: value.count(c) for c in set(value)}
+    lower_val = value.lower()
+    hash_value = sha256(lower_val.encode()).hexdigest()
+    char_freq = {c: lower_val.count(c) for c in set(lower_val)}
     return {
         "length": len(value),
-        "is_palindrome": value.lower() == value.lower()[::-1],
-        "unique_characters": len(set(value)),
+        "is_palindrome": lower_val == lower_val[::-1],
+        "unique_characters": len(set(lower_val)),
         "word_count": len(value.split()),
         "sha256_hash": hash_value,
         "character_frequency_map": char_freq
@@ -33,7 +38,7 @@ def parse_natural_language(query: str):
     q = query.lower()
     filters = {}
 
-    if "palindrome" in q:
+    if "palindrome" in q or "palindromic" in q:
         filters["is_palindrome"] = True
     if "single word" in q or "one word" in q:
         filters["word_count"] = 1
@@ -45,7 +50,7 @@ def parse_natural_language(query: str):
         filters["contains_character"] = contains_letter_match.group(1).lower()
 
     if not filters:
-        return None
+        return {}
     return filters
 
 def filter_strings(filters: dict):
@@ -71,39 +76,40 @@ def filter_strings(filters: dict):
 # POST /strings
 # -------------------------
 @app.post("/strings", status_code=201)
-async def create_string(payload: StringRequest):
-    if not isinstance(payload.value, str):
+def create_string(payload: StringRequest):
+    value = payload.value
+    if value is None or not isinstance(value, str):
         raise HTTPException(status_code=422, detail="'value' must be a string")
 
-    hash_value = sha256(payload.value.encode()).hexdigest()
-    if hash_value in db:
+    key = sha256(value.lower().encode()).hexdigest()
+    if key in db:
         raise HTTPException(status_code=409, detail="String already exists")
 
-    props = compute_properties(payload.value)
+    props = compute_properties(value)
     record = {
-        "id": hash_value,
-        "value": payload.value,
+        "id": key,
+        "value": value,
         "properties": props,
         "created_at": datetime.utcnow().isoformat() + "Z"
     }
-    db[hash_value] = record
+    db[key] = record
     return record
 
 # -------------------------
 # GET /strings/{string_value}
 # -------------------------
 @app.get("/strings/{string_value}")
-async def get_string(string_value: str):
-    hash_value = sha256(string_value.encode()).hexdigest()
-    if hash_value not in db:
+def get_string(string_value: str):
+    key = sha256(string_value.lower().encode()).hexdigest()
+    if key not in db:
         raise HTTPException(status_code=404, detail="String does not exist")
-    return db[hash_value]
+    return db[key]
 
 # -------------------------
 # GET /strings (with filters)
 # -------------------------
 @app.get("/strings")
-async def get_strings(
+def get_strings(
     is_palindrome: Optional[bool] = None,
     min_length: Optional[int] = None,
     max_length: Optional[int] = None,
@@ -123,7 +129,6 @@ async def get_strings(
         filters["contains_character"] = contains_character.lower()
 
     results = filter_strings(filters)
-
     return {
         "data": results,
         "count": len(results),
@@ -134,13 +139,9 @@ async def get_strings(
 # GET /strings/filter-by-natural-language
 # -------------------------
 @app.get("/strings/filter-by-natural-language")
-async def filter_by_nl(query: str):
+def filter_by_nl(query: str):
     filters = parse_natural_language(query)
-    if filters is None:
-        raise HTTPException(status_code=400, detail="Unable to parse natural language query")
-
     results = filter_strings(filters)
-
     return {
         "data": results,
         "count": len(results),
@@ -154,8 +155,8 @@ async def filter_by_nl(query: str):
 # DELETE /strings/{string_value}
 # -------------------------
 @app.delete("/strings/{string_value}", status_code=204)
-async def delete_string(string_value: str):
-    hash_value = sha256(string_value.encode()).hexdigest()
-    if hash_value not in db:
+def delete_string(string_value: str):
+    key = sha256(string_value.lower().encode()).hexdigest()
+    if key not in db:
         raise HTTPException(status_code=404, detail="String does not exist")
-    del db[hash_value]
+    del db[key]
